@@ -21,6 +21,14 @@
 		9F5E52DC2DB76110004314B0 /* ContentViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5E52DB2DB76110004314B0 /* ContentViewModel.swift */; };
 		9F5E52DE2DB76197004314B0 /* HeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5E52DD2DB76197004314B0 /* HeaderView.swift */; };
 		9F5E52E02DB761BA004314B0 /* GenerateButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5E52DF2DB761BA004314B0 /* GenerateButton.swift */; };
+		9F9B33EB2DBF207300E86A70 /* PythonModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33E92DBF207300E86A70 /* PythonModelGenerator.swift */; };
+		9F9B33EC2DBF207300E86A70 /* TypeScriptModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33EA2DBF207300E86A70 /* TypeScriptModelGenerator.swift */; };
+		9F9B33F32DBF28E600E86A70 /* RubyModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33ED2DBF28E600E86A70 /* RubyModelGenerator.swift */; };
+		9F9B33F42DBF28E600E86A70 /* RustModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33EE2DBF28E600E86A70 /* RustModelGenerator.swift */; };
+		9F9B33F52DBF28E600E86A70 /* PHPModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33EF2DBF28E600E86A70 /* PHPModelGenerator.swift */; };
+		9F9B33F62DBF28E600E86A70 /* CPPModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33F02DBF28E600E86A70 /* CPPModelGenerator.swift */; };
+		9F9B33F72DBF28E600E86A70 /* KotlinModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33F12DBF28E600E86A70 /* KotlinModelGenerator.swift */; };
+		9F9B33F82DBF28E600E86A70 /* JavaModelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9B33F22DBF28E600E86A70 /* JavaModelGenerator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +48,14 @@
 		9F5E52DB2DB76110004314B0 /* ContentViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViewModel.swift; sourceTree = "<group>"; };
 		9F5E52DD2DB76197004314B0 /* HeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderView.swift; sourceTree = "<group>"; };
 		9F5E52DF2DB761BA004314B0 /* GenerateButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateButton.swift; sourceTree = "<group>"; };
+		9F9B33E92DBF207300E86A70 /* PythonModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PythonModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33EA2DBF207300E86A70 /* TypeScriptModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TypeScriptModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33ED2DBF28E600E86A70 /* RubyModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RubyModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33EE2DBF28E600E86A70 /* RustModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RustModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33EF2DBF28E600E86A70 /* PHPModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PHPModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33F02DBF28E600E86A70 /* CPPModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CPPModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33F12DBF28E600E86A70 /* KotlinModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = KotlinModelGenerator.swift; sourceTree = "<group>"; };
+		9F9B33F22DBF28E600E86A70 /* JavaModelGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = JavaModelGenerator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +112,14 @@
 			children = (
 				9F5E52D52DB76072004314B0 /* ModelGeneratorProtocol.swift */,
 				9F5E52D72DB76085004314B0 /* SwiftModelGenerator.swift */,
+				9F9B33F02DBF28E600E86A70 /* CPPModelGenerator.swift */,
+				9F9B33F22DBF28E600E86A70 /* JavaModelGenerator.swift */,
+				9F9B33F12DBF28E600E86A70 /* KotlinModelGenerator.swift */,
+				9F9B33EF2DBF28E600E86A70 /* PHPModelGenerator.swift */,
+				9F9B33ED2DBF28E600E86A70 /* RubyModelGenerator.swift */,
+				9F9B33EE2DBF28E600E86A70 /* RustModelGenerator.swift */,
+				9F9B33E92DBF207300E86A70 /* PythonModelGenerator.swift */,
+				9F9B33EA2DBF207300E86A70 /* TypeScriptModelGenerator.swift */,
 				9F5E52D92DB760A4004314B0 /* ObjCModelGenerator.swift */,
 				9F5E52DB2DB76110004314B0 /* ContentViewModel.swift */,
 			);
@@ -193,16 +217,24 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9F9B33F32DBF28E600E86A70 /* RubyModelGenerator.swift in Sources */,
+				9F9B33EB2DBF207300E86A70 /* PythonModelGenerator.swift in Sources */,
 				9F5E52D62DB76072004314B0 /* ModelGeneratorProtocol.swift in Sources */,
+				9F9B33F52DBF28E600E86A70 /* PHPModelGenerator.swift in Sources */,
+				9F9B33EC2DBF207300E86A70 /* TypeScriptModelGenerator.swift in Sources */,
 				9F5E52DA2DB760A4004314B0 /* ObjCModelGenerator.swift in Sources */,
 				9F5E52D82DB76085004314B0 /* SwiftModelGenerator.swift in Sources */,
+				9F9B33F62DBF28E600E86A70 /* CPPModelGenerator.swift in Sources */,
 				9F5E52CF2DB76022004314B0 /* StringExtensions.swift in Sources */,
 				9F5E52DC2DB76110004314B0 /* ContentViewModel.swift in Sources */,
 				9F5E52BD2DB747C8004314B0 /* ContentView.swift in Sources */,
+				9F9B33F42DBF28E600E86A70 /* RustModelGenerator.swift in Sources */,
 				9F5E52BB2DB747C8004314B0 /* JsonToModelApp.swift in Sources */,
 				9F5E52DE2DB76197004314B0 /* HeaderView.swift in Sources */,
 				9F5E52D42DB76059004314B0 /* ModelOutputView.swift in Sources */,
 				9F5E52CA2DB75FC4004314B0 /* TypeUtilities.swift in Sources */,
+				9F9B33F72DBF28E600E86A70 /* KotlinModelGenerator.swift in Sources */,
+				9F9B33F82DBF28E600E86A70 /* JavaModelGenerator.swift in Sources */,
 				9F5E52E02DB761BA004314B0 /* GenerateButton.swift in Sources */,
 				9F5E52D22DB76045004314B0 /* ModelInputView.swift in Sources */,
 			);

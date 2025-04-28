@@ -9,23 +9,70 @@ import SwiftUI
 import Combine
 
 class ContentViewModel: ObservableObject {
+    // MARK: - Basic Properties
     @Published var jsonInput: String = ""
     @Published var modelOutput: String = ""
     @Published var modelName: String = ""
     @Published var inheritanceInput: String = ""
     @Published var showAlert: Bool = false
     @Published var alertMessage: String = ""
+    @Published var selectedLanguage: OutputLanguage = .swift
     
+    // MARK: - Swift Options
     @Published var isStructSelected: Bool = true
     @Published var useVarInsteadOfLet: Bool = true
     @Published var generateInit: Bool = true
-    @Published var selectedLanguage: OutputLanguage = .swift
     
+    // MARK: - Python Options
+    @Published var useDataclass: Bool = true
+    @Published var useTypeHints: Bool = true
+    
+    // MARK: - TypeScript Options
+    @Published var useInterface: Bool = true
+    @Published var useClass: Bool = false
+    @Published var useExport: Bool = true
+    
+    // MARK: - Java Options
+    @Published var useLombok: Bool = true
+    @Published var useGettersSetters: Bool = false
+    @Published var useSerializable: Bool = true
+    @Published var javaPackageName: String = "com.example.model"
+    
+    // MARK: - Kotlin Options
+    @Published var useDataClass: Bool = true
+    @Published var kotlinPackageName: String = "com.example.model"
+    
+    // MARK: - PHP Options
+//    @Published var useGettersSetters: Bool = true
+    @Published var phpNamespace: String = "App\\Models"
+    
+    // MARK: - C++ Options
+    @Published var cppNamespace: String = "model"
+    
+    // MARK: - Ruby Options
+    @Published var useAttr_accessor: Bool = true
+    @Published var rubyModuleName: String = "Model"
+    
+    // MARK: - Rust Options
+    @Published var useSerde: Bool = true
+    @Published var useClone: Bool = true
+    @Published var useDebug: Bool = true
+    
+    // MARK: - Generators
     private var generators: [OutputLanguage: ModelGeneratorProtocol.Type] = [
         .swift: SwiftModelGenerator.self,
-        .objectiveC: ObjCModelGenerator.self
+        .objectiveC: ObjCModelGenerator.self,
+        .python: PythonModelGenerator.self,
+        .typescript: TypeScriptModelGenerator.self,
+        .java: JavaModelGenerator.self,
+        .kotlin: KotlinModelGenerator.self,
+        .php: PHPModelGenerator.self,
+        .cpp: CPPModelGenerator.self,
+        .ruby: RubyModelGenerator.self,
+        .rust: RustModelGenerator.self
     ]
     
+    // MARK: - Public Methods
     func generateModel() {
         guard !jsonInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             showAlert(message: "Please enter JSON data")
@@ -63,6 +110,7 @@ class ContentViewModel: ObservableObject {
         #endif
     }
     
+    // MARK: - Private Methods
     private func prepareParameters() -> [String: Any] {
         var params: [String: Any] = [:]
         
@@ -77,6 +125,43 @@ class ContentViewModel: ObservableObject {
             
         case .objectiveC:
             params["inheritance"] = inheritanceInput.isEmpty ? ": NSObject" : ": \(inheritanceInput)"
+            
+        case .python:
+            params["useDataclass"] = useDataclass
+            params["useTypeHints"] = useTypeHints
+            
+        case .typescript:
+            params["useInterface"] = useInterface
+            params["useClass"] = useClass
+            params["useExport"] = useExport
+            
+        case .java:
+            params["useLombok"] = useLombok
+            params["useGettersSetters"] = useGettersSetters
+            params["useSerializable"] = useSerializable
+            params["packageName"] = javaPackageName
+            
+        case .kotlin:
+            params["useDataClass"] = useDataClass
+            params["useSerializable"] = useSerializable
+            params["packageName"] = kotlinPackageName
+            
+        case .php:
+            params["useGettersSetters"] = useGettersSetters
+            params["namespace"] = phpNamespace
+            
+        case .cpp:
+            params["useGettersSetters"] = useGettersSetters
+            params["namespace"] = cppNamespace
+            
+        case .ruby:
+            params["useAttr_accessor"] = useAttr_accessor
+            params["moduleName"] = rubyModuleName
+            
+        case .rust:
+            params["useSerde"] = useSerde
+            params["useClone"] = useClone
+            params["useDebug"] = useDebug
         }
         
         return params
@@ -91,9 +176,12 @@ class ContentViewModel: ObservableObject {
 enum OutputLanguage: String, CaseIterable {
     case swift = "Swift"
     case objectiveC = "Objective-C"
-    
-    // 可以轻松添加更多语言
-    // case kotlin = "Kotlin"
-    // case java = "Java"
-    // case typescript = "TypeScript"
+    case python = "Python"
+    case typescript = "TypeScript"
+    case java = "Java"
+    case kotlin = "Kotlin"
+    case php = "PHP"
+    case cpp = "C++"
+    case ruby = "Ruby"
+    case rust = "Rust"
 }
