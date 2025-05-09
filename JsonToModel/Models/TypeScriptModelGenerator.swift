@@ -1,10 +1,12 @@
- import Foundation
+import Foundation
 
 struct TypeScriptModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
         let useInterface: Bool
-        let useClass: Bool
+        let useType: Bool
         let useExport: Bool
+        let makeFieldsOptional: Bool
+        let useStrictTypes: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -14,8 +16,10 @@ struct TypeScriptModelGenerator: ModelGeneratorProtocol {
         
         let parameters = Parameters(
             useInterface: params["useInterface"] as? Bool ?? true,
-            useClass: params["useClass"] as? Bool ?? false,
-            useExport: params["useExport"] as? Bool ?? true
+            useType: params["useType"] as? Bool ?? false,
+            useExport: params["useExport"] as? Bool ?? true,
+            makeFieldsOptional: params["makeFieldsOptional"] as? Bool ?? false,
+            useStrictTypes: params["useStrictTypes"] as? Bool ?? true
         )
         
         return try generateTypeScriptModel(from: json, modelName: modelName, parameters: parameters)
@@ -43,109 +47,127 @@ struct TypeScriptModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        // 按原始JSON中的字段顺序排序
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
         let allModels = generateTypeScriptNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
-            useInterface: parameters.useInterface,
-            useClass: parameters.useClass,
-            useExport: parameters.useExport
+            parameters: parameters
         )
-        return allModels.joined(separator: "\n\n")
+        
+        // 添加文件头注释和导入语句
+        let header = """
+        // Auto-generated TypeScript model
+        // Generated from JSON on \(Date())
+        
+        """
+        
+        return header + allModels.joined(separator: "\n\n")
     }
     
     private static func generateTypeScriptNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        useInterface: Bool,
-        useClass: Bool,
-        useExport: Bool
+        parameters: Parameters,
+        isArrayItem: Bool = false
     ) -> [String] {
         var models = [String]()
         var properties = [String]()
         
-        for (key, value) in jsonDict {
-            if let nestedDict = value as? [String: Any] {
-                // 对嵌套字典也进行排序
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
-                let nestedModelName = key.uppercasedFirstLetter()
-                models += generateTypeScriptNestedModels(
-                    from: orderedNestedDict,
-                    modelName: nestedModelName,
-                    useInterface: useInterface,
-                    useClass: useClass,
-                    useExport: useExport
-                )
-                properties.append(generateProperty(for: key, value: nestedDict))
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
-                
-                if let nestedDict = firstElement as? [String: Any] {
-                    // 对数组中的嵌套字典也进行排序
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
-                    let nestedModelName = key.uppercasedFirstLetter() + "Item"
-                    models += generateTypeScriptNestedModels(
-                        from: orderedNestedDict,
-                        modelName: nestedModelName,
-                        useInterface: useInterface,
-                        useClass: useClass,
-                        useExport: useExport
-                    )
-                    properties.append(generateProperty(for: key, value: arrayValue))
-                } else {
-                    properties.append(generateProperty(for: key, value: arrayValue))
-                }
-            } else {
-                properties.append(generateProperty(for: key, value: value))
-            }
+        let sortedKeys = jsonDict.keys.sorted()
+        
+        for key in sortedKeys {
+            guard let value = jsonDict[key] else { continue }
+            
+            let tsKey = key.lowercasedFirstLetter()
+            let (typeString, nestedModels) = getTypeInfo(
+                for: value,
+                key: key,
+                modelName: modelName,
+                parameters: parameters
+            )
+            
+            models += nestedModels
+            
+            let isOptional = parameters.makeFieldsOptional || value is NSNull
+            let optionalMark = isOptional ? "?" : ""
+            let propertyLine = "    \(tsKey)\(optionalMark): \(typeString);"
+            
+            properties.append(propertyLine)
         }
         
-        let declarations = properties.joined(separator: "\n")
-        let exportKeyword = useExport ? "export " : ""
+        let exportKeyword = parameters.useExport ? "export " : ""
+        let modelDef: String
         
-        if useInterface {
-            let model = """
+        if parameters.useInterface {
+            modelDef = """
             \(exportKeyword)interface \(modelName) {
-            \(declarations)
+            \(properties.joined(separator: "\n"))
             }
             """
-            return [model] + models
-        } else if useClass {
-            let model = """
-            \(exportKeyword)class \(modelName) {
-            \(declarations)
-            }
-            """
-            return [model] + models
-        } else {
-            let model = """
+        } else if parameters.useType {
+            modelDef = """
             \(exportKeyword)type \(modelName) = {
-            \(declarations)
+            \(properties.joined(separator: "\n"))
             }
             """
-            return [model] + models
+        } else {
+            modelDef = """
+            \(exportKeyword)class \(modelName) {
+            \(properties.joined(separator: "\n"))
+            }
+            """
         }
+        
+        return [modelDef] + models
     }
     
-    private static func generateProperty(for key: String, value: Any) -> String {
-        let tsKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determineTypeScriptType(from: value)
-        return "    \(tsKey): \(typeInfo.type);"
+    private static func getTypeInfo(
+        for value: Any,
+        key: String,
+        modelName: String,
+        parameters: Parameters
+    ) -> (typeString: String, models: [String]) {
+        var models = [String]()
+        var typeStr = "any"
+        
+        switch value {
+        case is String:
+            typeStr = parameters.useStrictTypes ? "string" : "string"
+        case is Int, is Double, is Float, is Bool:
+            let numberValue = value as? NSNumber
+            if numberValue != nil && isBoolean(numberValue!) {
+                typeStr = parameters.useStrictTypes ? "boolean" : "boolean"
+            } else {
+                typeStr = parameters.useStrictTypes ? "number" : "number"
+            }
+
+        case let dict as [String: Any]:
+            let nestedModelName = key.uppercasedFirstLetter()
+            models += generateTypeScriptNestedModels(
+                from: dict,
+                modelName: nestedModelName,
+                parameters: parameters,
+                isArrayItem: true
+            )
+            typeStr = nestedModelName
+        case let array as [Any]:
+            if let first = array.first {
+                let (elementType, nested) = getTypeInfo(
+                    for: first,
+                    key: key,
+                    modelName: modelName,
+                    parameters: parameters
+                )
+                models += nested
+                typeStr = "\(elementType)[]"
+            } else {
+                typeStr = "any[]"
+            }
+        case is NSNull:
+            typeStr = "any"
+        default:
+            typeStr = "any"
+        }
+        
+        return (typeStr, models)
     }
 }

@@ -1,9 +1,10 @@
- import Foundation
+import Foundation
 
 struct PythonModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
         let useDataclass: Bool
         let useTypeHints: Bool
+        let makeFieldsOptional: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -13,7 +14,8 @@ struct PythonModelGenerator: ModelGeneratorProtocol {
         
         let parameters = Parameters(
             useDataclass: params["useDataclass"] as? Bool ?? true,
-            useTypeHints: params["useTypeHints"] as? Bool ?? true
+            useTypeHints: params["useTypeHints"] as? Bool ?? true,
+            makeFieldsOptional: params["makeFieldsOptional"] as? Bool ?? false
         )
         
         return try generatePythonModel(from: json, modelName: modelName, parameters: parameters)
@@ -41,94 +43,138 @@ struct PythonModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        // 按原始JSON中的字段顺序排序
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
+        // 生成所有嵌套模型
         let allModels = generatePythonNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
-            useDataclass: parameters.useDataclass,
-            useTypeHints: parameters.useTypeHints
+            parameters: parameters
         )
-        return allModels.joined(separator: "\n\n")
+        
+        // 添加必要的导入语句
+        let imports = """
+        from dataclasses import dataclass
+        from typing import List, Dict, Union, Optional
+        \(parameters.useDataclass ? "" : "\n# Remove @dataclass decorator if not needed")
+        
+        """
+        
+        return imports + allModels.joined(separator: "\n\n")
     }
     
     private static func generatePythonNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        useDataclass: Bool,
-        useTypeHints: Bool
+        parameters: Parameters,
+        isArrayItem: Bool = false
     ) -> [String] {
         var models = [String]()
         var properties = [String]()
         
-        for (key, value) in jsonDict {
-            if let nestedDict = value as? [String: Any] {
-                // 对嵌套字典也进行排序
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
-                let nestedModelName = key.uppercasedFirstLetter()
-                models += generatePythonNestedModels(
-                    from: orderedNestedDict,
-                    modelName: nestedModelName,
-                    useDataclass: useDataclass,
-                    useTypeHints: useTypeHints
-                )
-                properties.append(generateProperty(for: key, value: nestedDict, useTypeHints: useTypeHints))
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
-                
-                if let nestedDict = firstElement as? [String: Any] {
-                    // 对数组中的嵌套字典也进行排序
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
-                    let nestedModelName = key.uppercasedFirstLetter() + "Item"
-                    models += generatePythonNestedModels(
-                        from: orderedNestedDict,
-                        modelName: nestedModelName,
-                        useDataclass: useDataclass,
-                        useTypeHints: useTypeHints
-                    )
-                    properties.append(generateProperty(for: key, value: arrayValue, useTypeHints: useTypeHints))
-                } else {
-                    properties.append(generateProperty(for: key, value: arrayValue, useTypeHints: useTypeHints))
-                }
+        // 对字段按键名排序
+        let sortedKeys = jsonDict.keys.sorted()
+        
+        for key in sortedKeys {
+            guard let value = jsonDict[key] else { continue }
+            
+            let pythonKey = key.lowercasedFirstLetter()
+            let (typeString, nestedModels) = getTypeInfo(
+                for: value,
+                key: key,
+                modelName: modelName,
+                parameters: parameters
+            )
+            
+            models += nestedModels
+            
+            // 构建属性行
+            let typeSuffix = parameters.makeFieldsOptional ? " = None" : ""
+            let propertyLine: String
+            
+            if parameters.useTypeHints {
+                propertyLine = "    \(pythonKey): \(typeString)\(typeSuffix)"
             } else {
-                properties.append(generateProperty(for: key, value: value, useTypeHints: useTypeHints))
+                propertyLine = "    \(pythonKey)\(typeSuffix)"
+            }
+            
+            properties.append(propertyLine)
+        }
+        
+        // 构建模型定义
+        let decorator = parameters.useDataclass ? "@dataclass\n" : ""
+        let modelDef = """
+        \(decorator)class \(modelName):
+        \(properties.joined(separator: "\n"))
+        """
+        
+        return [modelDef] + models
+    }
+    
+    private static func getTypeInfo(
+        for value: Any,
+        key: String,
+        modelName: String,
+        parameters: Parameters
+    ) -> (typeString: String, models: [String]) {
+        var models = [String]()
+        var typeStr = "Any"
+        
+        switch value {
+        case is String:
+            typeStr = "str"
+        case is Int, is Bool:
+            let numberValue = value as? NSNumber
+            if numberValue != nil && isBoolean(numberValue!) {
+                typeStr = "bool"
+            } else {
+                typeStr = "int"
+            }
+        case is Double, is Float:
+            typeStr = "float"
+        case let dict as [String: Any]:
+            let nestedModelName = key.uppercasedFirstLetter()
+            models += generatePythonNestedModels(
+                from: dict,
+                modelName: nestedModelName,
+                parameters: parameters
+            )
+            typeStr = nestedModelName
+        case let array as [Any]:
+            if let first = array.first {
+                let (elementType, nested) = getTypeInfo(
+                    for: first,
+                    key: key + "Item",
+                    modelName: modelName,
+                    parameters: parameters
+                )
+                models += nested
+                typeStr = "List[\(elementType)]"
+            } else {
+                typeStr = "List[Any]"
+            }
+        case is NSNull:
+            typeStr = "Any" // 单独处理为 Optional
+        default:
+            typeStr = "Any"
+        }
+        
+        // 处理 Optional 类型
+        if parameters.makeFieldsOptional {
+            if typeStr.hasPrefix("Optional[") || typeStr.hasPrefix("Union[") {
+                // 已经是 Optional 类型，不再重复添加
+            } else if typeStr.contains("|") {
+                typeStr = "\(typeStr) | None"
+            } else {
+                typeStr = "\(typeStr) | None" // 使用 Python 3.10+ 的新语法
+                // 或者使用旧语法: typeStr = "Optional[\(typeStr)]"
             }
         }
         
-        let declarations = properties.joined(separator: "\n")
-        
-        let decorator = useDataclass ? "@dataclass\n" : ""
-        let model = """
-        \(decorator)class \(modelName):
-        \(declarations)
-        """
-        
-        return [model] + models
-    }
-    
-    private static func generateProperty(for key: String, value: Any, useTypeHints: Bool) -> String {
-        let pythonKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determinePythonType(from: value)
-        
-        if useTypeHints {
-            return "    \(pythonKey): \(typeInfo.type)"
-        } else {
-            return "    \(pythonKey)"
-        }
+        return (typeStr, models)
     }
 }
+
+func isBoolean(_ value: NSNumber) -> Bool {
+    // __NSCFBoolean 是 NSNumber 的子类，值是 true/false
+    return String(cString: object_getClassName(value)) == "__NSCFBoolean"
+}
+

@@ -1,4 +1,4 @@
- import Foundation
+import Foundation
 
 struct JavaModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
@@ -6,6 +6,7 @@ struct JavaModelGenerator: ModelGeneratorProtocol {
         let useGettersSetters: Bool
         let useSerializable: Bool
         let packageName: String
+        let useWrapperTypes: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -17,7 +18,8 @@ struct JavaModelGenerator: ModelGeneratorProtocol {
             useLombok: params["useLombok"] as? Bool ?? true,
             useGettersSetters: params["useGettersSetters"] as? Bool ?? false,
             useSerializable: params["useSerializable"] as? Bool ?? true,
-            packageName: params["packageName"] as? String ?? "com.example.model"
+            packageName: params["packageName"] as? String ?? "com.example.model",
+            useWrapperTypes: params["useWrapperTypes"] as? Bool ?? false
         )
         
         return try generateJavaModel(from: json, modelName: modelName, parameters: parameters)
@@ -45,107 +47,47 @@ struct JavaModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
         let allModels = generateJavaNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
             parameters: parameters
         )
+        
         return allModels.joined(separator: "\n\n")
     }
     
     private static func generateJavaNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        parameters: Parameters
+        parameters: Parameters,
+        isArrayItem: Bool = false
     ) -> [String] {
         var models = [String]()
         var properties = [String]()
         var gettersSetters = [String]()
         
-        for (key, value) in jsonDict {
-            if let nestedDict = value as? [String: Any] {
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
-                let nestedModelName = key.uppercasedFirstLetter()
-                models += generateJavaNestedModels(
-                    from: orderedNestedDict,
-                    modelName: nestedModelName,
-                    parameters: parameters
-                )
-                
-                let (property, getterSetter) = generateJavaProperty(
-                    for: key,
-                    value: nestedDict,
-                    useGettersSetters: parameters.useGettersSetters
-                )
-                properties.append(property)
-                if parameters.useGettersSetters {
-                    gettersSetters.append(getterSetter)
-                }
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
-                
-                if let nestedDict = firstElement as? [String: Any] {
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
-                    let nestedModelName = key.uppercasedFirstLetter() + "Item"
-                    models += generateJavaNestedModels(
-                        from: orderedNestedDict,
-                        modelName: nestedModelName,
-                        parameters: parameters
-                    )
-                    
-                    let (property, getterSetter) = generateJavaProperty(
-                        for: key,
-                        value: arrayValue,
-                        useGettersSetters: parameters.useGettersSetters
-                    )
-                    properties.append(property)
-                    if parameters.useGettersSetters {
-                        gettersSetters.append(getterSetter)
-                    }
-                } else {
-                    let (property, getterSetter) = generateJavaProperty(
-                        for: key,
-                        value: arrayValue,
-                        useGettersSetters: parameters.useGettersSetters
-                    )
-                    properties.append(property)
-                    if parameters.useGettersSetters {
-                        gettersSetters.append(getterSetter)
-                    }
-                }
-            } else {
-                let (property, getterSetter) = generateJavaProperty(
-                    for: key,
-                    value: value,
-                    useGettersSetters: parameters.useGettersSetters
-                )
-                properties.append(property)
-                if parameters.useGettersSetters {
-                    gettersSetters.append(getterSetter)
-                }
+        let sortedKeys = jsonDict.keys.sorted()
+        
+        for key in sortedKeys {
+            guard let value = jsonDict[key] else { continue }
+            
+            let (property, getterSetter, nestedModels) = generateJavaPropertyAndModels(
+                for: key,
+                value: value,
+                modelName: modelName,
+                parameters: parameters
+            )
+            
+            properties.append(property)
+            if parameters.useGettersSetters {
+                gettersSetters.append(getterSetter)
             }
+            models += nestedModels
         }
         
-        let imports = generateJavaImports(parameters: parameters)
+        let imports = generateJavaImports(for: properties, parameters: parameters)
         let annotations = generateJavaAnnotations(parameters: parameters)
-        let propertiesStr = properties.joined(separator: "\n")
-        let gettersSettersStr = gettersSetters.joined(separator: "\n\n")
+        let serialVersionUID = parameters.useSerializable ? "\n    private static final long serialVersionUID = 1L;" : ""
         
         let model = """
         package \(parameters.packageName);
@@ -153,57 +95,125 @@ struct JavaModelGenerator: ModelGeneratorProtocol {
         \(imports)
         
         \(annotations)
-        public class \(modelName) {
-        \(propertiesStr)
-        \(gettersSettersStr)
+        public class \(modelName)\(parameters.useSerializable ? " implements Serializable" : "") {\(serialVersionUID)
+        \(properties.joined(separator: "\n"))
+        \(gettersSetters.joined(separator: "\n\n"))
         }
         """
         
         return [model] + models
     }
     
-    private static func generateJavaProperty(
+    private static func generateJavaPropertyAndModels(
         for key: String,
         value: Any,
-        useGettersSetters: Bool
-    ) -> (property: String, getterSetter: String) {
+        modelName: String,
+        parameters: Parameters
+    ) -> (property: String, getterSetter: String, models: [String]) {
         let javaKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determineJavaType(from: value)
+        let (typeString, nestedModels) = getJavaTypeInfo(
+            for: value,
+            key: key,
+            modelName: modelName,
+            parameters: parameters
+        )
         
-        let property = "    private \(typeInfo.type) \(javaKey);"
+        let property = "    private \(typeString) \(javaKey);"
         
         var getterSetter = ""
-        if useGettersSetters {
+        if parameters.useGettersSetters {
             let capitalizedKey = key.uppercasedFirstLetter()
+            let getterPrefix = typeString == "boolean" ? "is" : "get"
+            
             getterSetter = """
-                public \(typeInfo.type) get\(capitalizedKey)() {
-                    return \(javaKey);
+                public \(typeString) \(getterPrefix)\(capitalizedKey)() {
+                    return this.\(javaKey);
                 }
                 
-                public void set\(capitalizedKey)(\(typeInfo.type) \(javaKey)) {
+                public void set\(capitalizedKey)(\(typeString) \(javaKey)) {
                     this.\(javaKey) = \(javaKey);
                 }
             """
         }
         
-        return (property, getterSetter)
+        return (property, getterSetter, nestedModels)
     }
     
-    private static func generateJavaImports(parameters: Parameters) -> String {
-        var imports = ["import java.io.Serializable;"]
-        if parameters.useLombok {
-            imports.append("import lombok.Data;")
+    private static func getJavaTypeInfo(
+        for value: Any,
+        key: String,
+        modelName: String,
+        parameters: Parameters
+    ) -> (typeString: String, models: [String]) {
+        var models = [String]()
+        var typeStr = "Object"
+        
+        switch value {
+        case is String:
+            typeStr = "String"
+        case is Int, is Bool:
+            let numberValue = value as? NSNumber
+            if numberValue != nil && isBoolean(numberValue!) {
+                typeStr = parameters.useWrapperTypes ? "Boolean" : "boolean"
+            } else {
+                typeStr = parameters.useWrapperTypes ? "Integer" : "int"
+            }
+        case is Double, is Float:
+            typeStr = parameters.useWrapperTypes ? "Double" : "double"
+
+        case let dict as [String: Any]:
+            let nestedModelName = key.uppercasedFirstLetter()
+            models += generateJavaNestedModels(
+                from: dict,
+                modelName: nestedModelName,
+                parameters: parameters,
+                isArrayItem: true
+            )
+            typeStr = nestedModelName
+        case let array as [Any]:
+            if let first = array.first {
+                let (elementType, nested) = getJavaTypeInfo(
+                    for: first,
+                    key: key,
+                    modelName: modelName,
+                    parameters: parameters
+                )
+                models += nested
+                typeStr = "List<\(elementType)>"
+            } else {
+                typeStr = "List<Object>"
+            }
+        case is NSNull:
+            typeStr = "Object"
+        default:
+            typeStr = "Object"
         }
-        return imports.joined(separator: "\n")
+        
+        return (typeStr, models)
+    }
+    
+    private static func generateJavaImports(for properties: [String], parameters: Parameters) -> String {
+        var imports = Set<String>()
+        
+        if parameters.useSerializable {
+            imports.insert("import java.io.Serializable;")
+        }
+        
+        if parameters.useLombok {
+            imports.insert("import lombok.Data;")
+        }
+        
+        if properties.contains(where: { $0.contains("List<") }) {
+            imports.insert("import java.util.List;")
+        }
+        
+        return imports.sorted().joined(separator: "\n")
     }
     
     private static func generateJavaAnnotations(parameters: Parameters) -> String {
         var annotations = [String]()
         if parameters.useLombok {
             annotations.append("@Data")
-        }
-        if parameters.useSerializable {
-            annotations.append("public class implements Serializable")
         }
         return annotations.joined(separator: "\n")
     }

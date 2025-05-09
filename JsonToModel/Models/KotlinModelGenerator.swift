@@ -1,10 +1,11 @@
- import Foundation
+import Foundation
 
 struct KotlinModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
         let useDataClass: Bool
         let useSerializable: Bool
         let packageName: String
+        let makeFieldsNullable: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -15,7 +16,8 @@ struct KotlinModelGenerator: ModelGeneratorProtocol {
         let parameters = Parameters(
             useDataClass: params["useDataClass"] as? Bool ?? true,
             useSerializable: params["useSerializable"] as? Bool ?? true,
-            packageName: params["packageName"] as? String ?? "com.example.model"
+            packageName: params["packageName"] as? String ?? "com.example.model",
+            makeFieldsNullable: params["makeFieldsNullable"] as? Bool ?? true
         )
         
         return try generateKotlinModel(from: json, modelName: modelName, parameters: parameters)
@@ -43,90 +45,150 @@ struct KotlinModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
         let allModels = generateKotlinNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
             parameters: parameters
         )
+        
         return allModels.joined(separator: "\n\n")
     }
     
     private static func generateKotlinNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        parameters: Parameters
+        parameters: Parameters,
+        isArrayItem: Bool = false
     ) -> [String] {
         var models = [String]()
         var properties = [String]()
         
-        for (key, value) in jsonDict {
-            if let nestedDict = value as? [String: Any] {
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
-                let nestedModelName = key.uppercasedFirstLetter()
-                models += generateKotlinNestedModels(
-                    from: orderedNestedDict,
-                    modelName: nestedModelName,
-                    parameters: parameters
-                )
-                properties.append(generateKotlinProperty(for: key, value: nestedDict))
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
-                
-                if let nestedDict = firstElement as? [String: Any] {
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
-                    let nestedModelName = key.uppercasedFirstLetter() + "Item"
-                    models += generateKotlinNestedModels(
-                        from: orderedNestedDict,
-                        modelName: nestedModelName,
-                        parameters: parameters
-                    )
-                    properties.append(generateKotlinProperty(for: key, value: arrayValue))
-                } else {
-                    properties.append(generateKotlinProperty(for: key, value: arrayValue))
-                }
-            } else {
-                properties.append(generateKotlinProperty(for: key, value: value))
-            }
+        let sortedKeys = jsonDict.keys.sorted()
+        
+        for key in sortedKeys {
+            guard let value = jsonDict[key] else { continue }
+            
+            let (property, nestedModels) = generateKotlinPropertyAndModels(
+                for: key,
+                value: value,
+                modelName: modelName,
+                parameters: parameters
+            )
+            
+            properties.append(property)
+            models += nestedModels
         }
         
         let imports = generateKotlinImports(parameters: parameters)
         let annotations = generateKotlinAnnotations(parameters: parameters)
-        let propertiesStr = properties.joined(separator: "\n")
+        let propertiesStr = properties.joined(separator: ",\n    ")
         
-        let model = """
-        package \(parameters.packageName)
-        
-        \(imports)
-        
-        \(annotations)
-        class \(modelName) {
-        \(propertiesStr)
+        let model: String
+        if parameters.useDataClass {
+            model = """
+            package \(parameters.packageName)
+            
+            \(imports)
+            
+            data class \(modelName)(
+                \(propertiesStr)
+            )\(annotations)
+            """
+        } else {
+            model = """
+            package \(parameters.packageName)
+            
+            \(imports)
+            
+            class \(modelName)\(annotations) {
+                \(properties.map { $0.replacingOccurrences(of: "    ", with: "        ") }.joined(separator: "\n\n"))
+            }
+            """
         }
-        """
         
         return [model] + models
     }
     
-    private static func generateKotlinProperty(for key: String, value: Any) -> String {
+    private static func generateKotlinPropertyAndModels(
+        for key: String,
+        value: Any,
+        modelName: String,
+        parameters: Parameters
+    ) -> (property: String, models: [String]) {
         let kotlinKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determineKotlinType(from: value)
-        return "    var \(kotlinKey): \(typeInfo.type)? = null"
+        let (typeString, nestedModels) = getKotlinTypeInfo(
+            for: value,
+            key: key,
+            modelName: modelName,
+            parameters: parameters
+        )
+        
+        let nullableMark = parameters.makeFieldsNullable ? "?" : ""
+        let defaultValue = parameters.makeFieldsNullable ? " = null" : ""
+        let property: String
+        
+        if parameters.useDataClass {
+            property = "    val \(kotlinKey): \(typeString)\(nullableMark)\(defaultValue)"
+        } else {
+            property = "    var \(kotlinKey): \(typeString)\(nullableMark)\(defaultValue)"
+        }
+        
+        return (property, nestedModels)
+    }
+    
+    private static func getKotlinTypeInfo(
+        for value: Any,
+        key: String,
+        modelName: String,
+        parameters: Parameters
+    ) -> (typeString: String, models: [String]) {
+        var models = [String]()
+        var typeStr = "Any"
+        
+        switch value {
+        case is String:
+            typeStr = "String"
+            
+        case is Int, is Bool:
+            let numberValue = value as? NSNumber
+            if numberValue != nil && isBoolean(numberValue!) {
+                typeStr = "Boolean"
+            } else {
+                typeStr = "Int"
+            }
+          
+        case is Double, is Float:
+            typeStr = "Double"
+            
+        case let dict as [String: Any]:
+            let nestedModelName = key.uppercasedFirstLetter()
+            models += generateKotlinNestedModels(
+                from: dict,
+                modelName: nestedModelName,
+                parameters: parameters,
+                isArrayItem: true
+            )
+            typeStr = nestedModelName
+        case let array as [Any]:
+            if let first = array.first {
+                let (elementType, nested) = getKotlinTypeInfo(
+                    for: first,
+                    key: key,
+                    modelName: modelName,
+                    parameters: parameters
+                )
+                models += nested
+                typeStr = "List<\(elementType)>"
+            } else {
+                typeStr = "List<Any>"
+            }
+        case is NSNull:
+            typeStr = "Any"
+        default:
+            typeStr = "Any"
+        }
+        
+        return (typeStr, models)
     }
     
     private static func generateKotlinImports(parameters: Parameters) -> String {
@@ -134,17 +196,14 @@ struct KotlinModelGenerator: ModelGeneratorProtocol {
         if parameters.useSerializable {
             imports.append("import java.io.Serializable")
         }
-        return imports.joined(separator: "\n")
+        return imports.isEmpty ? "" : imports.joined(separator: "\n")
     }
     
     private static func generateKotlinAnnotations(parameters: Parameters) -> String {
         var annotations = [String]()
-        if parameters.useDataClass {
-            annotations.append("@data")
-        }
         if parameters.useSerializable {
-            annotations.append(": Serializable")
+            annotations.append(" : Serializable")
         }
-        return annotations.joined(separator: "\n")
+        return annotations.joined(separator: " ")
     }
 }

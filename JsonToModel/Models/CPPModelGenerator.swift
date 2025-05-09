@@ -1,9 +1,11 @@
- import Foundation
+import Foundation
 
 struct CPPModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
-        let useGettersSetters: Bool
+        let useSmartPointers: Bool
+        let useConstReferences: Bool
         let namespace: String
+        let useMoveSemantics: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -12,8 +14,10 @@ struct CPPModelGenerator: ModelGeneratorProtocol {
         }
         
         let parameters = Parameters(
-            useGettersSetters: params["useGettersSetters"] as? Bool ?? true,
-            namespace: params["namespace"] as? String ?? "model"
+            useSmartPointers: params["useSmartPointers"] as? Bool ?? true,
+            useConstReferences: params["useConstReferences"] as? Bool ?? true,
+            namespace: params["namespace"] as? String ?? "model",
+            useMoveSemantics: params["useMoveSemantics"] as? Bool ?? true
         )
         
         return try generateCPPModel(from: json, modelName: modelName, parameters: parameters)
@@ -36,152 +40,253 @@ struct CPPModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidModelName)
         }
         
-        guard let jsonObject = try? safeParseJSON(json),
+        guard let jsonData = json.data(using: .utf8),
+              let jsonObject = try? JSONSerialization.jsonObject(with: jsonData),
               let jsonDict = jsonObject as? [String: Any] else {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
         let allModels = generateCPPNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
             parameters: parameters
         )
+        
         return allModels.joined(separator: "\n\n")
     }
     
     private static func generateCPPNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        parameters: Parameters
+        parameters: Parameters,
+        isArrayItem: Bool = false
     ) -> [String] {
         var models = [String]()
-        var properties = [String]()
-        var gettersSetters = [String]()
+        var privateMembers = [String]()
+        var publicMethods = [String]()
+        var includes = Set<String>(["#include <string>", "#include <vector>"])
         
-        for (key, value) in jsonDict {
-            if let nestedDict = value as? [String: Any] {
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
-                let nestedModelName = key.uppercasedFirstLetter()
-                models += generateCPPNestedModels(
-                    from: orderedNestedDict,
-                    modelName: nestedModelName,
-                    parameters: parameters
-                )
-                
-                let (property, getterSetter) = generateCPPProperty(
-                    for: key,
-                    value: nestedDict,
-                    useGettersSetters: parameters.useGettersSetters
-                )
-                properties.append(property)
-                if parameters.useGettersSetters {
-                    gettersSetters.append(getterSetter)
-                }
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
-                
-                if let nestedDict = firstElement as? [String: Any] {
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
-                    let nestedModelName = key.uppercasedFirstLetter() + "Item"
-                    models += generateCPPNestedModels(
-                        from: orderedNestedDict,
-                        modelName: nestedModelName,
-                        parameters: parameters
-                    )
-                    
-                    let (property, getterSetter) = generateCPPProperty(
-                        for: key,
-                        value: arrayValue,
-                        useGettersSetters: parameters.useGettersSetters
-                    )
-                    properties.append(property)
-                    if parameters.useGettersSetters {
-                        gettersSetters.append(getterSetter)
-                    }
-                } else {
-                    let (property, getterSetter) = generateCPPProperty(
-                        for: key,
-                        value: arrayValue,
-                        useGettersSetters: parameters.useGettersSetters
-                    )
-                    properties.append(property)
-                    if parameters.useGettersSetters {
-                        gettersSetters.append(getterSetter)
-                    }
-                }
+        let sortedKeys = jsonDict.keys.sorted()
+        
+        var constructorParams = [String]()
+        var constructorInitializers = [String]()
+        
+        for key in sortedKeys {
+            guard let value = jsonDict[key] else { continue }
+            
+            let (memberDecl, methods, nestedModels, typeInfo) = generateCPPClassMember(
+                for: key,
+                value: value,
+                modelName: modelName,
+                parameters: parameters
+            )
+            
+            privateMembers.append(memberDecl)
+            publicMethods += methods
+            models += nestedModels
+            includes.formUnion(typeInfo.requiredIncludes)
+            
+            // Build constructor
+            let paramType = parameters.useConstReferences && !typeInfo.isPrimitive ?
+                "const \(typeInfo.type)&" : typeInfo.type
+            let paramName = "new_" + key.lowercasedFirstLetter()
+            
+            constructorParams.append("        \(paramType) \(paramName)")
+            
+            if parameters.useMoveSemantics && typeInfo.isMovable {
+                constructorInitializers.append("    \(key.lowercasedFirstLetter())_(std::move(\(paramName)))")
             } else {
-                let (property, getterSetter) = generateCPPProperty(
-                    for: key,
-                    value: value,
-                    useGettersSetters: parameters.useGettersSetters
-                )
-                properties.append(property)
-                if parameters.useGettersSetters {
-                    gettersSetters.append(getterSetter)
-                }
+                constructorInitializers.append("    \(key.lowercasedFirstLetter())_(\(paramName))")
             }
         }
         
-        let propertiesStr = properties.joined(separator: "\n")
-        let gettersSettersStr = gettersSetters.joined(separator: "\n\n")
+        // Generate full class
+        let includeSection = Array(includes).sorted().joined(separator: "\n")
+        let privateSection = privateMembers.joined(separator: "\n")
+        let publicSection = publicMethods.joined(separator: "\n\n")
         
-        let header = """
+        let constructor: String
+        if !constructorParams.isEmpty {
+            constructor = """
+            
+            public:
+                \(modelName)(\(constructorParams.joined(separator: ",\n")))
+                : \(constructorInitializers.joined(separator: ",\n"))
+                {}
+            """
+        } else {
+            constructor = ""
+        }
+        
+        let model = """
         #pragma once
         
-        #include <string>
-        #include <vector>
+        \(includeSection)
         
         namespace \(parameters.namespace) {
         
         class \(modelName) {
         private:
-        \(propertiesStr)
-        
-        public:
-        \(gettersSettersStr)
+        \(privateSection)
+        \(constructor)
+        \(publicSection)
         };
         
         } // namespace \(parameters.namespace)
         """
         
-        return [header] + models
+        return [model] + models
     }
     
-    private static func generateCPPProperty(
+    private static func generateCPPClassMember(
         for key: String,
         value: Any,
-        useGettersSetters: Bool
-    ) -> (property: String, getterSetter: String) {
-        let cppKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determineCPPType(from: value)
+        modelName: String,
+        parameters: Parameters
+    ) -> (memberDecl: String, methods: [String], nestedModels: [String], typeInfo: CPPTypeInfo) {
+        let memberName = key.lowercasedFirstLetter() + "_"
+        var nestedModels = [String]()
+        var methods = [String]()
         
-        let property = "    \(typeInfo.type) \(cppKey);"
+        // 使用新的严格类型判断
+        let typeInfo: CPPTypeInfo
+        var requiredIncludes = Set<String>()
         
-        var getterSetter = ""
-        if useGettersSetters {
-            let capitalizedKey = key.uppercasedFirstLetter()
-            getterSetter = """
-                \(typeInfo.type) get\(capitalizedKey)() const { return \(cppKey); }
-                void set\(capitalizedKey)(const \(typeInfo.type)& \(cppKey)) { this->\(cppKey) = \(cppKey); }
-            """
+        // 严格类型检查
+        if let boolValue = value as? Bool {
+            typeInfo = CPPTypeInfo(type: "bool", requiredIncludes: [], isMovable: false)
+        }
+        else if let stringValue = value as? String {
+            typeInfo = CPPTypeInfo(type: "std::string", requiredIncludes: ["#include <string>"], isMovable: true)
+        }
+        else if let intValue = value as? Int {
+            typeInfo = CPPTypeInfo(type: "int", requiredIncludes: [], isMovable: false)
+        }
+        else if let doubleValue = value as? Double {
+            typeInfo = CPPTypeInfo(type: "double", requiredIncludes: [], isMovable: false)
+        }
+        else if let dict = value as? [String: Any] {
+            let nestedModelName = key.uppercasedFirstLetter()
+            nestedModels += generateCPPNestedModels(
+                from: dict,
+                modelName: nestedModelName,
+                parameters: parameters,
+                isArrayItem: true
+            )
+            
+            if parameters.useSmartPointers {
+                typeInfo = CPPTypeInfo(
+                    type: "std::unique_ptr<\(nestedModelName)>",
+                    requiredIncludes: ["#include <memory>", "#include \"\(nestedModelName.lowercased()).h\""],
+                    isMovable: true
+                )
+            } else {
+                typeInfo = CPPTypeInfo(
+                    type: nestedModelName,
+                    requiredIncludes: ["#include \"\(nestedModelName.lowercased()).h\""],
+                    isMovable: true
+                )
+            }
+        }
+        else if let array = value as? [Any], let firstElement = array.first {
+            let elementTypeInfo: CPPTypeInfo
+            
+            // 递归处理数组元素类型
+            if let boolElement = firstElement as? Bool {
+                elementTypeInfo = CPPTypeInfo(type: "bool", requiredIncludes: [], isMovable: false)
+            }
+            else if let stringElement = firstElement as? String {
+                elementTypeInfo = CPPTypeInfo(type: "std::string", requiredIncludes: ["#include <string>"], isMovable: true)
+            }
+            else if let intElement = firstElement as? Int {
+                elementTypeInfo = CPPTypeInfo(type: "int", requiredIncludes: [], isMovable: false)
+            }
+            else if let dictElement = firstElement as? [String: Any] {
+                let nestedModelName = key.uppercasedFirstLetter() + "Item"
+                nestedModels += generateCPPNestedModels(
+                    from: dictElement,
+                    modelName: nestedModelName,
+                    parameters: parameters,
+                    isArrayItem: true
+                )
+                elementTypeInfo = CPPTypeInfo(
+                    type: nestedModelName,
+                    requiredIncludes: ["#include \"\(nestedModelName.lowercased()).h\""],
+                    isMovable: true
+                )
+            }
+            else {
+                elementTypeInfo = CPPTypeInfo(type: "void", requiredIncludes: [], isMovable: false)
+            }
+            
+            let vectorInclude = Set(["#include <vector>"])
+            let combinedIncludes = vectorInclude.union(elementTypeInfo.requiredIncludes)
+            
+            typeInfo = CPPTypeInfo(
+                type: "std::vector<\(elementTypeInfo.type)>",
+                requiredIncludes: combinedIncludes,
+                isMovable: true
+            )
+        }
+        else {
+            typeInfo = CPPTypeInfo(type: "void", requiredIncludes: [], isMovable: false)
         }
         
-        return (property, getterSetter)
+        // 生成成员变量声明
+        let memberDecl = "    \(typeInfo.type) \(memberName);"
+        
+        // 生成getter/setter
+        let capitalizedKey = key.uppercasedFirstLetter()
+        
+        // Getter
+        let returnType: String
+        if parameters.useConstReferences && typeInfo.isReferenceType {
+            returnType = "const \(typeInfo.type)&"
+        } else {
+            returnType = typeInfo.type
+        }
+        
+        let getter = "    \(returnType) get\(capitalizedKey)() const { return \(memberName); }"
+        methods.append(getter)
+        
+        // Setter
+        let paramType: String
+        if parameters.useConstReferences && !typeInfo.isPrimitive {
+            paramType = "const \(typeInfo.type)&"
+        } else {
+            paramType = typeInfo.type
+        }
+        
+        let setter: String
+        if parameters.useMoveSemantics && typeInfo.isMovable {
+            setter = """
+                void set\(capitalizedKey)(\(paramType) new_\(memberName)) {
+                    \(memberName) = std::move(new_\(memberName));
+                }
+            """
+        } else {
+            setter = """
+                void set\(capitalizedKey)(\(paramType) new_\(memberName)) {
+                    \(memberName) = new_\(memberName);
+                }
+            """
+        }
+        methods.append(setter)
+        
+        return (memberDecl, methods, nestedModels, typeInfo)
+    }
+}
+
+struct CPPTypeInfo {
+    let type: String
+    let requiredIncludes: Set<String>
+    let isMovable: Bool
+    
+    var isPrimitive: Bool {
+        return ["int", "double", "float", "bool"].contains(type)
+    }
+    
+    var isReferenceType: Bool {
+        return !isPrimitive && type != "void"
     }
 }

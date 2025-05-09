@@ -1,9 +1,11 @@
- import Foundation
+import Foundation
 
 struct RubyModelGenerator: ModelGeneratorProtocol {
     struct Parameters {
-        let useAttrAccessor: Bool
+        let useInitialize: Bool
         let moduleName: String
+        let useSnakeCase: Bool
+        let addToHashMethod: Bool
     }
     
     static func generateModel(from json: String, modelName: String, additionalParameters: [String: Any]) throws -> String {
@@ -12,8 +14,10 @@ struct RubyModelGenerator: ModelGeneratorProtocol {
         }
         
         let parameters = Parameters(
-            useAttrAccessor: params["useAttr_accessor"] as? Bool ?? true,
-            moduleName: params["moduleName"] as? String ?? "Model"
+            useInitialize: params["useInitialize"] as? Bool ?? true,
+            moduleName: params["moduleName"] as? String ?? "Model",
+            useSnakeCase: params["useSnakeCase"] as? Bool ?? true,
+            addToHashMethod: params["addToHashMethod"] as? Bool ?? false
         )
         
         return try generateRubyModel(from: json, modelName: modelName, parameters: parameters)
@@ -36,89 +40,142 @@ struct RubyModelGenerator: ModelGeneratorProtocol {
             throw ModelGenerationError(type: .invalidModelName)
         }
         
-        guard let jsonObject = try? safeParseJSON(json),
+        guard let jsonData = json.data(using: .utf8),
+              let jsonObject = try? JSONSerialization.jsonObject(with: jsonData),
               let jsonDict = jsonObject as? [String: Any] else {
             throw ModelGenerationError(type: .invalidJSON)
         }
         
-        let sortedKeys = jsonDict.keys.sorted()
-        var orderedDict = [(key: String, value: Any)]()
-        for key in sortedKeys {
-            orderedDict.append((key, jsonDict[key]!))
-        }
-        
+        var generatedClasses = Set<String>()
         let allModels = generateRubyNestedModels(
-            from: orderedDict,
+            from: jsonDict,
             modelName: modelName,
-            parameters: parameters
+            parameters: parameters,
+            generatedClasses: &generatedClasses
         )
+        
         return allModels.joined(separator: "\n\n")
     }
     
     private static func generateRubyNestedModels(
-        from jsonDict: [(key: String, value: Any)],
+        from jsonDict: [String: Any],
         modelName: String,
-        parameters: Parameters
+        parameters: Parameters,
+        generatedClasses: inout Set<String>
     ) -> [String] {
+        // 防止重复生成
+        if generatedClasses.contains(modelName) {
+            return []
+        }
+        generatedClasses.insert(modelName)
+        
         var models = [String]()
         var properties = [String]()
+        var initParams = [String]()
+        var initAssignments = [String]()
+        var toHashLines = [String]()
         
-        for (key, value) in jsonDict {
+        for (key, value) in jsonDict.sorted(by: { $0.key < $1.key }) {
+            let rubyKey = parameters.useSnakeCase ?
+                key.camelCaseToSnakeCase() :
+                key.lowercasedFirstLetter()
+            
+            // 处理属性
+            properties.append("    attr_accessor :\(rubyKey)")
+            
+            // 处理嵌套对象
             if let nestedDict = value as? [String: Any] {
-                let sortedNestedKeys = nestedDict.keys.sorted()
-                var orderedNestedDict = [(key: String, value: Any)]()
-                for nestedKey in sortedNestedKeys {
-                    orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                }
-                
                 let nestedModelName = key.uppercasedFirstLetter()
                 models += generateRubyNestedModels(
-                    from: orderedNestedDict,
+                    from: nestedDict,
                     modelName: nestedModelName,
-                    parameters: parameters
+                    parameters: parameters,
+                    generatedClasses: &generatedClasses
                 )
-                properties.append(generateRubyProperty(for: key, value: nestedDict))
-            } else if let arrayValue = value as? [Any], !arrayValue.isEmpty {
-                let firstElement = arrayValue[0]
                 
-                if let nestedDict = firstElement as? [String: Any] {
-                    let sortedNestedKeys = nestedDict.keys.sorted()
-                    var orderedNestedDict = [(key: String, value: Any)]()
-                    for nestedKey in sortedNestedKeys {
-                        orderedNestedDict.append((nestedKey, nestedDict[nestedKey]!))
-                    }
-                    
+                initParams.append("      \(rubyKey): nil")
+                initAssignments.append("      @\(rubyKey) = \(rubyKey)")
+                toHashLines.append("      \(rubyKey): \(rubyKey)&.to_hash")
+            }
+            // 处理数组
+            else if let array = value as? [Any], !array.isEmpty {
+                if let firstElement = array.first as? [String: Any] {
                     let nestedModelName = key.uppercasedFirstLetter() + "Item"
                     models += generateRubyNestedModels(
-                        from: orderedNestedDict,
+                        from: firstElement,
                         modelName: nestedModelName,
-                        parameters: parameters
+                        parameters: parameters,
+                        generatedClasses: &generatedClasses
                     )
-                    properties.append(generateRubyProperty(for: key, value: arrayValue))
+                    
+                    initParams.append("      \(rubyKey): []")
+                    initAssignments.append("      @\(rubyKey) = \(rubyKey)")
+                    toHashLines.append("      \(rubyKey): \(rubyKey).map(&:to_hash)")
                 } else {
-                    properties.append(generateRubyProperty(for: key, value: arrayValue))
+                    initParams.append("      \(rubyKey): []")
+                    initAssignments.append("      @\(rubyKey) = \(rubyKey)")
+                    toHashLines.append("      \(rubyKey): \(rubyKey).dup")
                 }
-            } else {
-                properties.append(generateRubyProperty(for: key, value: value))
+            }
+            // 处理基本类型
+            else {
+                let defaultValue: String
+                switch value {
+                case is String: defaultValue = "nil"
+                case is Int, is Bool: 
+                    let numberValue = value as? NSNumber
+                    if numberValue != nil && isBoolean(numberValue!) {
+                        defaultValue = "false"
+                    } else {
+                        defaultValue = "nil"
+                    }
+                case is Double, is Float: defaultValue = "nil"
+                default: defaultValue = "nil"
+                }
+                
+                initParams.append("      \(rubyKey): \(defaultValue)")
+                initAssignments.append("      @\(rubyKey) = \(rubyKey)")
+                toHashLines.append("      \(rubyKey): \(rubyKey)")
             }
         }
         
-        let propertiesStr = properties.joined(separator: "\n")
-        
-        let model = """
+        // 构建类定义
+        var classDefinition = """
         module \(parameters.moduleName)
           class \(modelName)
-        \(propertiesStr)
+        \(properties.joined(separator: "\n"))
+        """
+        
+        // 添加初始化方法
+        if parameters.useInitialize && !initParams.isEmpty {
+            classDefinition += """
+            
+                def initialize(
+            \(initParams.joined(separator: ",\n"))
+                )
+            \(initAssignments.joined(separator: "\n"))
+                end \n
+            """
+        }
+        
+        // 添加to_hash方法
+        if parameters.addToHashMethod && !toHashLines.isEmpty {
+            classDefinition += """
+            
+                def to_hash
+                  {
+            \(toHashLines.joined(separator: ",\n"))
+                  }
+                end  \n
+            """
+        }
+
+        classDefinition += """
           end
         end
         """
         
-        return [model] + models
-    }
-    
-    private static func generateRubyProperty(for key: String, value: Any) -> String {
-        let rubyKey = key.lowercasedFirstLetter()
-        let typeInfo = TypeUtilities.determineRubyType(from: value)
-        return "    attr_accessor :\(rubyKey)"
+        return [classDefinition] + models
     }
 }
+
