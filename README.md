@@ -1,6 +1,6 @@
-# JSONModelGenerator
+# JSONToModel
 
-**JSONModelGenerator** 是一款专为开发者打造的 macOS 应用程序，用于将 JSON 字符串快速转换为多种编程语言的数据模型代码，帮助提升开发效率，减少手动编码错误。
+**JSONToModel** 是一款专为开发者打造的 macOS 应用程序，用于将 JSON 字符串快速转换为多种编程语言的数据模型代码，帮助提升开发效率，减少手动编码错误。
 
 ## ✨ 功能特色
 
@@ -11,7 +11,7 @@
 
 ## 💡 支持语言
 
-JSONModelGenerator 当前支持以下语言的数据模型生成：
+JSONToModel 当前支持以下语言的数据模型生成：
 
 - Swift  
 - Objective-C  
