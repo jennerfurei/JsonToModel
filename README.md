@@ -49,6 +49,7 @@ JSONModelGenerator 当前支持以下语言的数据模型生成：
   "name": "Alice",
   "isActive": true
 }
+```
 选择 Swift，输出：
 ```
 struct Model: Codable {
@@ -56,6 +57,7 @@ struct Model: Codable {
     let name: String
     let isActive: Bool
 }
+```
 
 🙌 反馈与支持
 
